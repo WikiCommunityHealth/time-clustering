@@ -70,7 +70,7 @@ def convert_time(atime):
     return mdates.date2num(atime)
 
 
-def main(infile, langs, n_clusters=None, plot=True):
+def main(infile, outfile, langs, n_clusters=None, plot=True):
     df = pd.read_csv(infile).set_index('languagecode')
     df = df.rename({'year_month': 'date', 'count': 'value'}, axis=1)
     df = df.drop(columns=['milestone', 'peak'])
@@ -190,7 +190,7 @@ def main(infile, langs, n_clusters=None, plot=True):
                            columns=["Series", "Cluster"])
               .sort_values(by="Cluster").set_index("Series")
               )
-    out_df.to_csv('langs_clusters.tsv', sep="\t")
+    out_df.to_csv(outfile, sep="\t")
 
     fig, axs = plt.subplots(plots_per_row, plots_per_row, figsize=(25, 25))
     fig.suptitle('Clusters')
@@ -246,6 +246,8 @@ def get_params_from_config(config_file):
 
     params = {}
     params['infile'] = pathlib.Path(config['general']['infile'])
+    params['outfile'] = pathlib.Path(config['general']['outfile'])
+
     params['langs'] = [lang.strip()
                        for lang in config['general']['langs'].strip().split(',')]
     params['n_clusters'] = int(config['clustering']['n_clusters'])
