@@ -16,7 +16,8 @@ import datetime
 # Essential Libraries
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
+from matplotlib import dates as mdates
 
 # algorithms
 from minisom import MiniSom
@@ -63,6 +64,12 @@ def ax_index(idx, dim):
     return (nrow, ncol)
 
 
+def convert_time(atime):
+    # Convert datetime objects to Matplotlib dates.
+    # https://matplotlib.org/api/dates_api.html
+    return mdates.date2num(atime)
+
+
 def main(infile, langs, n_clusters=None, plot=True):
     df = pd.read_csv(infile).set_index('languagecode')
     df = df.rename({'year_month': 'date', 'count': 'value'}, axis=1)
@@ -99,6 +106,8 @@ def main(infile, langs, n_clusters=None, plot=True):
 
     # find longest timeseries
     longest_series = get_longest_series(timeseries)
+    time_months = [convert_time(tt.to_pydatetime())
+                   for tt in longest_series.index.to_list()]
     len_series = len(longest_series)
 
     # add missing dates and fill gaps with interpolated values
@@ -146,21 +155,26 @@ def main(infile, langs, n_clusters=None, plot=True):
     plots_per_row = math.ceil(math.sqrt(n_clusters))
     fig, axs = plt.subplots(plots_per_row, plots_per_row, figsize=(30, 30))
     fig.suptitle('Clusters')
+    # xtick format string
+    years_fmt = mdates.DateFormatter('%Y-%m')
 
     clusters = {label: list() for label in unique_labels}
 
     # for each label there is, plot every series with that label
     for label, ts in zip(labels, rescaled_timeseries):
         nrow, ncol = ax_index(label, plots_per_row)
-        axs[nrow, ncol].plot(ts, c="gray", alpha=0.4)
+        axs[nrow, ncol].plot(time_months, ts, c="gray", alpha=0.4)
+        axs[nrow, ncol].xaxis.set_major_formatter(years_fmt)
+        axs[nrow, ncol].xaxis.set_major_locator(plt.MaxNLocator(20))
         clusters[label].append(ts)
 
     for label in unique_labels:
         nrow, ncol = ax_index(label, plots_per_row)
-        axs[nrow, ncol].plot(np.average(np.vstack(clusters[label]), axis=0),
+        axs[nrow, ncol].plot(time_months, np.average(np.vstack(clusters[label]), axis=0),
                              c="red")
         axs[nrow, ncol].set_title(f"C{label}")
 
+    fig.autofmt_xdate()
     plt.draw()
     logger.info('K-Means 1: DONE.')
 
@@ -184,15 +198,18 @@ def main(infile, langs, n_clusters=None, plot=True):
     # for each label there is, plot every series with that label
     for label, ts in zip(labels, rescaled_timeseries):
         nrow, ncol = ax_index(label, plots_per_row)
-        axs[nrow, ncol].plot(ts, c="gray", alpha=0.4)
+        axs[nrow, ncol].plot(time_months, ts, c="gray", alpha=0.4)
+        axs[nrow, ncol].xaxis.set_major_formatter(years_fmt)
+        axs[nrow, ncol].xaxis.set_major_locator(plt.MaxNLocator(20))
         clusters[label].append(ts)
 
     for label in unique_labels:
         nrow, ncol = ax_index(label, plots_per_row)
-        axs[nrow, ncol].plot(dtw_barycenter_averaging(np.vstack(clusters[label])),
+        axs[nrow, ncol].plot(time_months, dtw_barycenter_averaging(np.vstack(clusters[label])),
                              c="green")
         axs[nrow, ncol].set_title(f"C{label}")
 
+    fig.autofmt_xdate()
     plt.draw()
     logger.info('K-Means 2: DONE.')
 
@@ -251,6 +268,7 @@ def get_params_from_cli(cli_args):
     params['plot'] = args.plot
 
     return params
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Cluster Wikipedia active editors timelines.")
