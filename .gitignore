@@ -1,14 +1,14 @@
 # ignore logs
 *.err
 *.out
+*.log
 
 # ignore venv directory
 venv/
 
-# ignore data directory
-data/
-*.tsv
-*.csv
+# ignore data dir
+data/*.*
+!data/.gitkeep
 
 # ignore screenshots
 *.png
