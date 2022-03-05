@@ -228,10 +228,11 @@ def logging_setup(loglevel):
         )
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(loglevel)
+    root_logger.setLevel(logging.DEBUG)
 
     console_out = logging.StreamHandler(sys.stdout)
     console_out.setFormatter(formatter)
+    console_out.setLevel(loglevel)
     logfile_out = logging.FileHandler('time_clustering.log')
 
     root_logger.addHandler(console_out)
