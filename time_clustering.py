@@ -1,448 +1,302 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import sys
+import math
+import pathlib
+import logging
+import operator
+import argparse
+import configparser as cp
 
 # time
 import time
 import datetime
-from dateutil import relativedelta
-import calendar
-
-
-import sys
-import os
-import math
 
 # Essential Libraries
 import pandas as pd
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 
-# Preprocessing
-from sklearn.preprocessing import MinMaxScaler
-
-# Algorithms
+# algorithms
 from minisom import MiniSom
+from sklearn.preprocessing import MinMaxScaler
 from tslearn.barycenters import dtw_barycenter_averaging
 from tslearn.clustering import TimeSeriesKMeans
-from sklearn.cluster import KMeans
-
-from sklearn.decomposition import PCA
-
-# https://stats.wikimedia.org/#/all-projects
-# https://meta.wikimedia.org/wiki/List_of_Wikipedias/ca
-# https://meta.wikimedia.org/wiki/Research:Metrics#Volume_of_contribution
 
 
-# MAIN
-def main():
+def get_longest_series(list_of_timeseries):
+    maxlen_series = -1
+    longest_series = None
+    for series in list_of_timeseries:
+        if len(series) >= maxlen_series:
+            maxlen_series = len(series)
+            longest_series = series
 
-    """
-
-    directory = 'kaggle/'
-    mySeries = []
-    namesofMySeries = []
-    for filename in os.listdir(directory):
-        if filename.endswith(".csv"):
-            df = pd.read_csv(directory+filename)
-            df = df.loc[:,["date","value"]]
-
-#            print (df.head(10))
-#            input('')
-            # While we are at it I just filtered the columns that we will be working on
-            df.set_index("date",inplace=True)
-            # ,set the date columns as index
-            df.sort_index(inplace=True)
-            # and lastly, ordered the data according to our date index
-            mySeries.append(df)
-            namesofMySeries.append(filename[:-4])
+    return longest_series
 
 
-    """
-
-#    print (mySeries)
-#    input('')
-    
+def check_minmax(series, minchk, maxchk):
+    return (math.isclose(min(series), minchk) and 
+            math.isclose(max(series), maxchk))
 
 
+def has_nan_values(series):
+    # check if any value is NaN
+    # https://chartio.com/resources/tutorials/
+    #    how-to-check-if-any-value-is-nan-in-a-pandas-dataframe/
+    return series.isnull().values.any()
 
 
-    df = pd.read_csv('active_editors_all_languages.csv').set_index('languagecode')
-    df = df.rename({'year_month': 'date', 'count':'value'}, axis=1)
-    df = df.drop(columns=['milestone','peak'])
+def barcol(n, list_of_tuples):
+    # returns a list with the `n`-th elements of each tuple from a list 
+    # of tuples `list_of_tuples`
+    return [*map(operator.itemgetter(n), list_of_tuples)]
+
+
+def ax_index(idx, dim):
+    # nrow is the (integer) division between idx and dim
+    nrow = idx // dim
+    # ncol is the remain of the division between idx and dim
+    ncol = idx % dim
+
+    return (nrow, ncol)
+
+
+def main(infile, langs, n_clusters=None, plot=True):
+    df = pd.read_csv(infile).set_index('languagecode')
+    df = df.rename({'year_month': 'date', 'count': 'value'}, axis=1)
+    df = df.drop(columns=['milestone', 'peak'])
 
     df = df[df.date != '2021-12']
     df['date'] = pd.to_datetime(df['date'])
-#    df['date'] = pd.to_datetime(df["date"].dt.strftime('%Y-%m'))
 
-    langs = df.index.unique().tolist()
-#    langs = ['ca','es','eu','en','it','ro','de','fr']
-    langs = ['de','en','es','fr','ja','ar','fa','he','id','it','ko','nl','pl','pt','ru','tr','uk','vi','zh','bn','cs','fi','hu','sv','th','az','be','bg','ca','da','el','eo','et','eu','gl','hi','hr','hy','ka','lt','lv','ml','ms','no','ro','simple','sk','sl','sr','ta','ur','zh_yue']
-
-    mySeries = []
-    namesofMySeries = []
+    timeseries = []
+    lang_series = []
     for langcode in langs:
-        df1 = df.loc[langcode].reset_index()
-        df1 = df1.drop(columns=['languagecode'])
+        tsdf = df.loc[langcode].reset_index()
+        tsdf = tsdf.drop(columns=['languagecode'])
 
-#        print (df1.head(10))
-#        input('')
+        tsdf = tsdf.loc[:, ["date", "value"]]
+        df_value_max = tsdf.value.max()
 
-        df1 = df1.loc[:,["date","value"]]
+        tsdf['value'] = tsdf['value']/df_value_max
 
-        df_value_max = df1.value.max()
+        # while we are at it I just filtered the columns that we will be working on
+        tsdf.set_index("date", inplace=True)
 
-        df1['value'] = df1['value']/df_value_max
+        # set the date columns as index
+        tsdf.sort_index(inplace=True)
 
-        # While we are at it I just filtered the columns that we will be working on
-        df1.set_index("date",inplace=True)
-        # ,set the date columns as index
-        df1.sort_index(inplace=True)
         # and lastly, ordered the data according to our date index
-        df1 = df1[:-1]
+        tsdf = tsdf[:-1]
 
-        mySeries.append(df1)
-        namesofMySeries.append(langcode)
+        timeseries.append(tsdf)
+        lang_series.append(langcode)
 
+    # --- PRE-PROCESSING
+    logger.info('START PREPROCESSING')
 
+    # find longest timeseries
+    longest_series = get_longest_series(timeseries)
+    len_series = len(longest_series)
 
-    print (namesofMySeries)
-    print (mySeries)
-    print ('inici')
+    # add missing dates and fill gaps with interpolated values
+    timeseries = [ts.reindex(longest_series.index) for ts in timeseries]
+    # check there are no NAN values
+    assert all([len(ts) == len(longest_series) for ts in timeseries]), \
+           "Unexpected timeseries length"
 
+    # fill gaps with interpolated values
+    timeseries = [ts.interpolate(limit_direction="both") for ts in timeseries]
+    # check there are no NAN values
+    assert all([not has_nan_values(ts) for ts in timeseries]), "Unexpected NAN values"
 
+    # rescale all timeseries to [0, 1]
+    rescaled_timeseries = [MinMaxScaler().fit_transform(ts).reshape(len(ts))
+                           for ts in timeseries]
 
+    assert all([check_minmax(ts, minchk=0.0, maxchk=1.0)
+                for ts in rescaled_timeseries]), "Timeseries limits outside [0, 1]"
 
+    # --- CLUSTERING
+    logger.info('START CLUSTERING')
 
-    # PRE-PROCESSING
+    dim_x = dim_y = math.ceil(math.sqrt(math.sqrt(len(rescaled_timeseries))))
+    som = MiniSom(dim_x, dim_y, len_series, sigma=0.3, learning_rate=0.1)
+    logger.debug(f'dim_x: {dim_x}, dim_y: {dim_y}, len_series: {len_series}')
 
+    som.random_weights_init(rescaled_timeseries)
+    som.train(rescaled_timeseries, 50000)
 
-    series_lengths = {len(series) for series in mySeries}
-    print(series_lengths)
+    # --- K-MEANS
+    logger.info('START K-MEANS')
 
+    # A good rule of thumb is choosing k as the square root of the number of points
+    # in the training data set in kNN
+    if n_clusters is None:
+        n_clusters = math.ceil(math.sqrt(len(timeseries))) 
 
-    ind = 0
-    for series in mySeries:
-#        print("["+str(ind)+"] "+series.index[0]+" "+series.index[len(series)-1])
-        ind+=1
+    km = TimeSeriesKMeans(n_clusters=n_clusters, metric="dtw")
+    labels = km.fit_predict(timeseries)
+    unique_labels = sorted(set(labels))
 
+    # --- PLOTS
+    logger.info('PLOTTING')
+    plots_per_row = math.ceil(math.sqrt(n_clusters))
+    fig, axs = plt.subplots(plots_per_row, plots_per_row, figsize=(30, 30))
+    fig.suptitle('Clusters')
 
+    clusters = {label: list() for label in unique_labels}
 
+    # for each label there is, plot every series with that label
+    for label, ts in zip(labels, rescaled_timeseries):
+        nrow, ncol = ax_index(label, plots_per_row)
+        axs[nrow, ncol].plot(ts, c="gray", alpha=0.4)
+        clusters[label].append(ts)
 
-    max_len = max(series_lengths)
-    longest_series = None
-    for series in mySeries:
-        if len(series) == max_len:
-            longest_series = series
+    for label in unique_labels:
+        nrow, ncol = ax_index(label, plots_per_row)
+        axs[nrow, ncol].plot(np.average(np.vstack(clusters[label]), axis=0),
+                             c="red")
+        axs[nrow, ncol].set_title(f"C{label}")
 
+    plt.draw()
+    logger.info('K-Means 1: DONE.')
 
-    problems_index = []
+    # bar_data: [('C0', 15), ('C1', 1), ('C2', 19), ('C3', 17)]
+    bar_data = [(f"C{label}", len(c)) for label, c in clusters.items()]
+    plt.figure(figsize=(15, 5))
+    plt.title("Cluster Distribution for KMeans")
+    plt.bar(barcol(0, bar_data), barcol(1, bar_data))
+    plt.draw()
 
-    for i in range(len(mySeries)):
-        if len(mySeries[i])!= max_len:
-            problems_index.append(i)
-            mySeries[i] = mySeries[i].reindex(longest_series.index)
+    fancy_names_for_labels = [f"Cluster {label}" for label in labels]
+    out_df = (pd.DataFrame(zip(lang_series, fancy_names_for_labels),
+                           columns=["Series", "Cluster"])
+              .sort_values(by="Cluster").set_index("Series")
+              )
+    out_df.to_csv('langs_clusters.tsv', sep="\t")
 
+    fig, axs = plt.subplots(plots_per_row, plots_per_row, figsize=(25, 25))
+    fig.suptitle('Clusters')
 
-    def nan_counter(list_of_series):
-        nan_polluted_series_counter = 0
-        for series in list_of_series:
-            if series.isnull().sum().sum() > 0:
-                nan_polluted_series_counter+=1
-        print(nan_polluted_series_counter)
+    # for each label there is, plot every series with that label
+    for label, ts in zip(labels, rescaled_timeseries):
+        nrow, ncol = ax_index(label, plots_per_row)
+        axs[nrow, ncol].plot(ts, c="gray", alpha=0.4)
+        clusters[label].append(ts)
 
-    nan_counter(mySeries)
+    for label in unique_labels:
+        nrow, ncol = ax_index(label, plots_per_row)
+        axs[nrow, ncol].plot(dtw_barycenter_averaging(np.vstack(clusters[label])),
+                             c="green")
+        axs[nrow, ncol].set_title(f"C{label}")
 
-    for i in problems_index:
-        mySeries[i].interpolate(limit_direction="both",inplace=True)
+    plt.draw()
+    logger.info('K-Means 2: DONE.')
 
-    
-    nan_counter(mySeries)
-
-
-
-    for i in range(len(mySeries)):
-        scaler = MinMaxScaler()
-        mySeries[i] = MinMaxScaler().fit_transform(mySeries[i])
-        mySeries[i]= mySeries[i].reshape(len(mySeries[i]))
-
-    print("max: "+str(max(mySeries[0]))+"\tmin: "+str(min(mySeries[0])))
-    print(mySeries[0][:5])
-
-
-
-
-
-    # CLUSTERING
-
-    som_x = som_y = math.ceil(math.sqrt(math.sqrt(len(mySeries))))
-    som = MiniSom(som_x, som_y,len(mySeries[0]), sigma=0.3, learning_rate = 0.1)
-
-    print (mySeries[1])
-    print ('ara')
-
-    som.random_weights_init(mySeries)
-    som.train(mySeries, 50000)
-
-
-    """
-    def plot_som_series_averaged_center(som_x, som_y, win_map):
-        fig, axs = plt.subplots(som_x,som_y,figsize=(25,25))
-        fig.suptitle('Clusters')
-        for x in range(som_x):
-            for y in range(som_y):
-                cluster = (x,y)
-                if cluster in win_map.keys():
-                    for series in win_map[cluster]:
-                        axs[cluster].plot(series,c="gray",alpha=0.5) 
-                    axs[cluster].plot(np.average(np.vstack(win_map[cluster]),axis=0),c="red")
-                cluster_number = x*som_y+y+1
-                axs[cluster].set_title(f"Cluster {cluster_number}")
-
+    if plot:
+        logger.info('SHOW PLOTS.')
         plt.show()
-
-
-    win_map = som.win_map(mySeries)
-    # Returns the mapping of the winner nodes and inputs
-
-#    plot_som_series_averaged_center(som_x, som_y, win_map)
-
-
-
-
-
-    cluster_c = []
-    cluster_n = []
-    for x in range(som_x):
-        for y in range(som_y):
-            cluster = (x,y)
-            if cluster in win_map.keys():
-                cluster_c.append(len(win_map[cluster]))
-            else:
-                cluster_c.append(0)
-            cluster_number = x*som_y+y+1
-            cluster_n.append(f"C{cluster_number}")
-
-    plt.figure(figsize=(25,5))
-    plt.title("Cluster Distribution for SOM")
-    plt.bar(cluster_n,cluster_c)
-    plt.show()
-    """
-
-
-
-    # K-MEANS
-
-    print ('k-means')
-    cluster_count = math.ceil(math.sqrt(len(mySeries))) 
-    # A good rule of thumb is choosing k as the square root of the number of points in the training data set in kNN
-
-    cluster_count = 4
-
-    km = TimeSeriesKMeans(n_clusters=cluster_count, metric="dtw")
-
-    labels = km.fit_predict(mySeries)
-
-
-
-
-
-    plot_count = math.ceil(math.sqrt(cluster_count))
-
-    fig, axs = plt.subplots(plot_count,plot_count,figsize=(30,30))
-    fig.suptitle('Clusters')
-    row_i=0
-    column_j=0
-    # For each label there is,
-    # plots every series with that label
-    for label in set(labels):
-        cluster = []
-        for i in range(len(labels)):
-                if(labels[i]==label):
-                    axs[row_i, column_j].plot(mySeries[i],c="gray",alpha=0.4)
-                    cluster.append(mySeries[i])
-        if len(cluster) > 0:
-            axs[row_i, column_j].plot(np.average(np.vstack(cluster),axis=0),c="red")
-        axs[row_i, column_j].set_title("C"+str(row_i*som_y+column_j))
-        column_j+=1
-        if column_j%plot_count == 0:
-            row_i+=1
-            column_j=0
-
-     
-    plt.show()
-    print ('K-means 1 fet.')
-
-    cluster_c = [len(labels[labels==i]) for i in range(cluster_count)]
-    cluster_n = ["C"+str(i) for i in range(cluster_count)]
-    plt.figure(figsize=(15,5))
-    plt.title("Cluster Distribution for KMeans")
-    plt.bar(cluster_n,cluster_c)
-    plt.show()
-    print ('Distribution 1')
-
-    fancy_names_for_labels = [f"Cluster {label}" for label in labels]
-    a = pd.DataFrame(zip(namesofMySeries,fancy_names_for_labels),columns=["Series","Cluster"]).sort_values(by="Cluster").set_index("Series")
-    a.to_csv('file_langs_clusters.tsv', sep = "\t")
-    print (a.head(10))
-    print (fancy_names_for_labels)
-    print ('Output done.')
-
-
-    input('')
-
-
-
-    
-    plot_count = math.ceil(math.sqrt(cluster_count))
-
-    fig, axs = plt.subplots(plot_count,plot_count,figsize=(25,25))
-    fig.suptitle('Clusters')
-    row_i=0
-    column_j=0
-    for label in set(labels):
-        cluster = []
-        for i in range(len(labels)):
-                if(labels[i]==label):
-                    axs[row_i, column_j].plot(mySeries[i],c="gray",alpha=0.4)
-                    cluster.append(mySeries[i])
-        if len(cluster) > 0:
-            axs[row_i, column_j].plot(dtw_barycenter_averaging(np.vstack(cluster)),c="red")
-        axs[row_i, column_j].set_title("C"+str(row_i*som_y+column_j))
-        column_j+=1
-        if column_j%plot_count == 0:
-            row_i+=1
-            column_j=0
-            
-    plt.show()
-    print ('K-means 2 fet.')
-
-    cluster_c = [len(labels[labels==i]) for i in range(cluster_count)]
-    cluster_n = ["C"+str(i) for i in range(cluster_count)]
-    plt.figure(figsize=(15,5))
-    plt.title("Cluster Distribution for KMeans")
-    plt.bar(cluster_n,cluster_c)
-    plt.show()
-    print ('Distribution 2')
-
-
-    fancy_names_for_labels = [f"Cluster {label}" for label in labels]
-    a = pd.DataFrame(zip(namesofMySeries,fancy_names_for_labels),columns=["Series","Cluster"]).sort_values(by="Cluster").set_index("Series")
-    a.to_csv('file.tsv', sep = "\t")
-    print (a.head(10))
-    print (fancy_names_for_labels)
-    print ('Output done.')
-
-    input('')
-
-    
-
-
-
-
-
-
-
-
-    input('')
 
     return
 
 
-    # SHOW THE ORIGINAL TIMESERIES
-    fig, axs = plt.subplots(5,5,figsize=(25,25))
-    fig.suptitle('Series')
-    for i in range(5):
-        for j in range(5):
-            if i*4+j+1>len(mySeries): # pass the others that we can't fill
-                continue
-            axs[i, j].plot(mySeries[i*4+j].values)
-            axs[i, j].set_title(namesofMySeries[i*4+j])
-    plt.show()
-
-
-
-    # series_lengths = {len(series) for series in mySeries}
-    # print(series_lengths)
-
-
-    print ('eh')
-
-
-
-################################################################
-
-# FUNCTIONS
-
-def get_time_clustering():
-
-    cluster_count = math.ceil(math.sqrt(len(mySeries))) 
-    # A good rule of thumb is choosing k as the square root of the number of points in the training data set in kNN
-
-    km = TimeSeriesKMeans(n_clusters=cluster_count, metric="dtw")
-
-    labels = km.fit_predict(mySeries)
-
-
-    plot_count = math.ceil(math.sqrt(cluster_count))
-
-    fig, axs = plt.subplots(plot_count,plot_count,figsize=(25,25))
-    fig.suptitle('Clusters')
-    row_i=0
-    column_j=0
-    # For each label there is,
-    # plots every series with that label
-    for label in set(labels):
-        cluster = []
-        for i in range(len(labels)):
-                if(labels[i]==label):
-                    axs[row_i, column_j].plot(mySeries[i],c="gray",alpha=0.4)
-                    cluster.append(mySeries[i])
-        if len(cluster) > 0:
-            axs[row_i, column_j].plot(np.average(np.vstack(cluster),axis=0),c="red")
-        axs[row_i, column_j].set_title("Cluster "+str(row_i*som_y+column_j))
-        column_j+=1
-        if column_j%plot_count == 0:
-            row_i+=1
-            column_j=0
-            
-    plt.show()
-
-
-    print ('eh')
-
-
-
-
 #######################################################################################
+def logging_setup(loglevel):
+    formatter = logging.Formatter(
+        '[%(asctime)s][%(levelname)s]:\t%(message)s',
+        datefmt='%Y-%m-%dT%H:%M:%SZ'
+        )
 
-class Logger_out(object): # this prints both the output to a file and to the terminal screen.
-    def __init__(self):
-        self.terminal = sys.stdout
-        self.log = open("time_clustering.out", "w")
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-    def flush(self):
-        pass
-class Logger_err(object): # this prints both the output to a file and to the terminal screen.
-    def __init__(self):
-        self.terminal = sys.stdout
-        self.log = open("time_clustering.err", "w")
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-    def flush(self):
-        pass
+    root_logger = logging.getLogger()
+    root_logger.setLevel(loglevel)
 
+    console_out = logging.StreamHandler(sys.stdout)
+    console_out.setFormatter(formatter)
+    logfile_out = logging.FileHandler('time_clustering.log')
+
+    root_logger.addHandler(console_out)
+    root_logger.addHandler(logfile_out)
+
+    return root_logger
+
+
+def get_params_from_config(config_file):
+    config = cp.ConfigParser()
+    config.read(config_file)
+
+    params = {}
+    params['infile'] = pathlib.Path(config['general']['infile'])
+    params['langs'] = [lang.strip()
+                       for lang in config['general']['langs'].strip().split(',')]
+    params['n_clusters'] = int(config['clustering']['n_clusters'])
+
+    return params
+
+
+def get_params_from_cli(cli_args):
+    params = {}
+
+    params['loglevel'] = logging.WARNING
+    if cli_args.verbose:
+        params['loglevel'] = logging.INFO
+    if cli_args.debug:
+        params['loglevel'] = logging.DEBUG
+
+    if cli_args.n_clusters:
+        params['n_clusters'] = cli_args.n_clusters
+
+    params['plot'] = args.plot
+
+    return params
 
 if __name__ == '__main__':
-    sys.stdout = Logger_out()
-    sys.stderr = Logger_err()
+    parser = argparse.ArgumentParser(description="Cluster Wikipedia active editors timelines.")
+    parser.add_argument('-c', '--config',
+                        type=pathlib.Path,
+                        default=pathlib.Path('time_clustering.conf'),
+                        help='Config file [default: time_clustering.conf].'
+                        )
+    parser.add_argument('-d', '--debug',
+                        action='store_true',
+                        help='Enable debug (DEBUG) logging. Overrides --verbose.'
+                        )
+    parser.add_argument('-n', '--n-clusters',
+                        type=int,
+                        help='Number of clustres'
+                        )
+    parser.add_argument('--no-plot',
+                        dest='plot',
+                        action='store_false',
+                        help='Do not show plots.'
+                        )
+    parser.add_argument('-v', '--verbose',
+                        action='store_true',
+                        help='Enable verbose (INFO) logging.'
+                        )
+    args = parser.parse_args()
+    params_cli = get_params_from_cli(args)
 
-    startTime = time.time()
+    global logger
+    logger = logging_setup(params_cli['loglevel'])
 
-    print ('* Starting the TIME CLUSTERING at this exact time: ' + str(datetime.datetime.now().strftime("%m/%d/%Y, %H:%M:%S")))
-    main()
+    params = get_params_from_config(args.config)
+    params['plot'] = params_cli['plot']
 
-    finishTime = time.time()
-    print ('* Done with the TIME CLUSTERING completed successfuly after: ' + str(datetime.timedelta(seconds=finishTime - startTime)))
+    start_time = time.time()
+    start_time_iso = datetime.datetime.fromtimestamp(start_time).isoformat()
+    logger.info(f'Starting TIME CLUSTERING at: {start_time_iso}')
+
+    # pass dictionary of parameters to function
+    main(**params)
+
+    finish_time = time.time()
+    finish_time_iso = datetime.datetime.fromtimestamp(finish_time).isoformat()
+
+    elapsed_time = round(finish_time-start_time, 3)
+    logger.info(f'Finishing TIME CLUSTERING at: {finish_time_iso}')
+    logger.info(f'TIME CLUSTERING completed successfuly in {elapsed_time} seconds.')
+
+    exit(0)
