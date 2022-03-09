@@ -3,6 +3,7 @@
 
 import sys
 import math
+import inspect
 import pathlib
 import logging
 import operator
@@ -266,9 +267,24 @@ def get_params_from_cli(cli_args):
         params['loglevel'] = logging.DEBUG
 
     if cli_args.n_clusters:
-        params['n_clusters'] = cli_args.n_clusters
+        params['n_clusters'] = int(cli_args.n_clusters)
 
     params['plot'] = args.plot
+
+    return params
+
+
+def get_main_params(config, cli):
+    # get main parameters names
+    mnames = set((inspect.signature(main).parameters).keys())
+
+    # start with config params
+    params = {k: config[k] for k in mnames.intersection(config.keys())}
+
+    # update values with cli settings
+    params.update((k, cli[k]) for k in mnames.intersection(cli.keys()))
+
+    assert (set(params.keys()) == mnames)
 
     return params
 
@@ -303,15 +319,16 @@ if __name__ == '__main__':
     global logger
     logger = logging_setup(params_cli['loglevel'])
 
-    params = get_params_from_config(args.config)
-    params['plot'] = params_cli['plot']
+    params_config = get_params_from_config(args.config)
+
+    main_params = get_main_params(params_config, params_cli)
 
     start_time = time.time()
     start_time_iso = datetime.datetime.fromtimestamp(start_time).isoformat()
     logger.info(f'Starting TIME CLUSTERING at: {start_time_iso}')
 
     # pass dictionary of parameters to function
-    main(**params)
+    main(**main_params)
 
     finish_time = time.time()
     finish_time_iso = datetime.datetime.fromtimestamp(finish_time).isoformat()
