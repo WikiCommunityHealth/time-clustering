@@ -26,6 +26,9 @@ from sklearn.preprocessing import MinMaxScaler
 from tslearn.barycenters import dtw_barycenter_averaging
 from tslearn.clustering import TimeSeriesKMeans
 
+# global variables
+ROLLING_AVERAGE_WINDOW = 12
+
 
 def get_longest_series(list_of_timeseries):
     maxlen_series = -1
@@ -129,15 +132,29 @@ def main(infile, outfile, langs, n_clusters=None, plot=True):
     assert all([check_minmax(ts, minchk=0.0, maxchk=1.0)
                 for ts in rescaled_timeseries]), "Timeseries limits outside [0, 1]"
 
+    # Compute smoothed average
+    #
+    # The window is set by the parameter ROLLING_AVERAGE_WINDOW (defaults to 12), the windos is
+    # centered. Missing values at the end (because of the window are filled with the last value)
+    smoothed_timeseries = [(pd.DataFrame(ts)
+                            .rolling(window=ROLLING_AVERAGE_WINDOW,
+                                     center=True
+                                     )
+                            .mean()
+                            .fillna(method='ffill')
+                            .fillna(method='bfill')
+                            .to_numpy().reshape(len(ts)))
+                           for ts in rescaled_timeseries]
+
     # --- CLUSTERING
     logger.info('START CLUSTERING')
 
-    dim_x = dim_y = math.ceil(math.sqrt(math.sqrt(len(rescaled_timeseries))))
+    dim_x = dim_y = math.ceil(math.sqrt(math.sqrt(len(smoothed_timeseries))))
     som = MiniSom(dim_x, dim_y, len_series, sigma=0.3, learning_rate=0.1)
     logger.debug(f'dim_x: {dim_x}, dim_y: {dim_y}, len_series: {len_series}')
 
-    som.random_weights_init(rescaled_timeseries)
-    som.train(rescaled_timeseries, 50000)
+    som.random_weights_init(smoothed_timeseries)
+    som.train(smoothed_timeseries, 50000)
 
     # --- K-MEANS
     logger.info('START K-MEANS')
@@ -162,7 +179,7 @@ def main(infile, outfile, langs, n_clusters=None, plot=True):
     clusters = {label: list() for label in unique_labels}
 
     # for each label there is, plot every series with that label
-    for label, ts in zip(labels, rescaled_timeseries):
+    for label, ts in zip(labels, smoothed_timeseries):
         nrow, ncol = ax_index(label, plots_per_row)
         axs[nrow, ncol].plot(time_months, ts, c="gray", alpha=0.4)
         axs[nrow, ncol].xaxis.set_major_formatter(years_fmt)
@@ -197,7 +214,7 @@ def main(infile, outfile, langs, n_clusters=None, plot=True):
     fig.suptitle('Clusters')
 
     # for each label there is, plot every series with that label
-    for label, ts in zip(labels, rescaled_timeseries):
+    for label, ts in zip(labels, smoothed_timeseries):
         nrow, ncol = ax_index(label, plots_per_row)
         axs[nrow, ncol].plot(time_months, ts, c="gray", alpha=0.4)
         axs[nrow, ncol].xaxis.set_major_formatter(years_fmt)
