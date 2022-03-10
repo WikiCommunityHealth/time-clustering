@@ -6,10 +6,6 @@
 # ignore venv directory
 venv/
 
-# ignore data dir
-data/*.*
-!data/.gitkeep
-
 # ignore screenshots
 *.png
 
